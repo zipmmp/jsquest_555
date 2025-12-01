@@ -1,11 +1,13 @@
-const { ChatInputCommandInteraction } = require('discord.js');
-const { SlashCommand, slashCommandFlags } = require('../../lib/quest/handler/slashCommand.js');
-const { CustomClient } = require('../../core/customClient.js');
-const { I18nInstance } = require('../../core/i18n.js');
-const { ChildManager } = require('../../core/ChildManager.js');
-const { EmbedBuilder } = require('../../lib/quest/handler/embedBuilder.js');
-const numeral = require('numeral');
-const pidusage = require('pidusage');
+const { ChatInputCommandInteraction } = require("discord.js");
+const { SlashCommand, slashCommandFlags } = require("../../lib/handler/slashCommand.js");
+const { CustomClient } = require("../../core/customClient.js");
+const { permissionList } = require("../../lib/handler/messageCommand.js");
+const { I18nInstance } = require("../../core/i18n.js");
+const { ChildManager } = require("../../core/ChildManager.js");
+const { EmbedBuilder } = require("../../lib/handler/embedBuilder.js");
+const numeral = require("numeral");
+const pidusage = require("pidusage");
+const { usersCache } = require("../../core/cache.js");
 
 module.exports = class setLang extends SlashCommand {
     constructor() {
@@ -30,10 +32,13 @@ module.exports = class setLang extends SlashCommand {
         const totalRam = ram.reduce((acc, curr) => acc + curr.memory, 0);
         const totalCpu = ram.reduce((acc, curr) => acc + curr.cpu, 0);
 
-        let text = '';
-        text += `- **${i18n.t("usage.totalRam")}:** \`${totalRam.toFixed(2)} MB\`\n`;
-        text += `- **${i18n.t("usage.totalCpu")}**: \`${totalCpu.toFixed(2)}%\`\n`;
-        text += `- **${i18n.t("usage.currentSolvers")}:** \`${ChildManager.TotalUsage}\`\n`;
+        let text = ``;
+
+        const usersCacheSize = usersCache.size;
+        const questsCacheSize = usersCache.reduce((acc, curr) => acc + curr.quests.size, 0);
+
+        text += `- **Total Users Cache:** \`${usersCacheSize}\`\n- **Total Quests Cache:** \`${questsCacheSize}\`\n`;
+        text += `- **${i18n.t("usage.totalRam")}:** \`${totalRam.toFixed(2)} MB\`\n- **${i18n.t("usage.totalCpu")}**: \`${totalCpu.toFixed(2)}%\`\n- **${i18n.t("usage.currentSolvers")}:** \`${ChildManager.TotalUsage}\`\n`;
         text += `- **${i18n.t("usage.childProcess")}**: \`${ram.length - 1}\`\n`;
         text += `# **${i18n.t("usage.processUsage")}**:\n\n`;
 
@@ -45,17 +50,17 @@ module.exports = class setLang extends SlashCommand {
             embeds: [new EmbedBuilder().setDescription(text).setColor("Random")]
         });
     }
-}
+};
 
 async function getProcessUsage(pid) {
     try {
         const stats = await pidusage(pid);
         return {
             cpu: stats.cpu,
-            memory: numeral(stats.memory / 1024 / 1024).value(),
+            memory: numeral(stats.memory / 1024 / 1024).value()
         };
     } catch (error) {
-        console.error('Error fetching process usage:', error);
+        console.error("Error:", error);
         return { cpu: 0, memory: 0 };
     }
 }
