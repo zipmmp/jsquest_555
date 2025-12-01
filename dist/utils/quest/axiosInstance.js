@@ -1,63 +1,80 @@
-// customAxiosWithProxy.js
-const axios = require('axios');
-const { generateHeaders } = require('./genrateHeaders.js');
+const axios = require("axios");
+const { generateHeaders } = require("./genrateHeaders.js");
 
-/**
- * useProxy can be:
- * - false/null -> no proxy
- * - { ip: "host:port", authentication: "user:pass" }
- * - or a string like "host:port" (no auth)
- */
-const customAxiosWithProxy = (token, useProxy = null) => {
-    const headers = generateHeaders(token);
-    const config = {
-        baseURL: "https://discord.com/api/v9/",
-        headers,
-        timeout: 10000,
+// Simple in-memory last reset timestamp & remaining count per bucket
+const bucketMap = new Map();
+
+const customAxiosWithProxy = (token, useProxy) => {
+  const headers = generateHeaders(token);
+
+  const config = {
+    baseURL: "https://discord.com/api/v9/",
+    headers,
+    timeout: 30000,
+  };
+
+  if (useProxy) {
+    const [host, portStr] = useProxy.ip.split(":");
+    const [username, password] = useProxy.authentication.split(":");
+    config.proxy = {
+      protocol: "http",
+      host,
+      port: parseInt(portStr, 10),
+      auth: {
+        username,
+        password,
+      },
     };
+  }
 
-    if (useProxy) {
-        // دعم عدة صيغ للـ useProxy
-        let hostPort = null;
-        let auth = null;
+  const axiosInstance = axios.create(config);
 
-        if (typeof useProxy === "string") {
-            hostPort = useProxy;
-        } else if (useProxy?.ip) {
-            hostPort = useProxy.ip;
-            if (useProxy.authentication) auth = useProxy.authentication;
+  // Request interceptor: optionally delay if bucket says we must wait
+  axiosInstance.interceptors.request.use(
+    async (req) => {
+      const bucketKey = `${req.method || "GET"}:${req.url}`;
+      const info = bucketMap.get(bucketKey);
+
+      if (info && info.remaining !== null && info.remaining <= 0 && info.resetAfter !== null) {
+        await new Promise(resolve => setTimeout(resolve, info.resetAfter * 1000));
+      }
+
+      return req;
+    },
+    (error) => Promise.reject(error)
+  );
+
+  // Response interceptor: capture rate-limit headers & handle 429
+  axiosInstance.interceptors.response.use(
+    (response) => {
+      const headers = response.headers;
+      const bucketKey = `${response.config.method || "GET"}:${response.config.url}`;
+      const remaining = headers["x-ratelimit-remaining"] !== undefined ?
+        parseInt(headers["x-ratelimit-remaining"], 10) : null;
+      const resetAfter = headers["x-ratelimit-reset-after"] !== undefined ?
+        parseFloat(headers["x-ratelimit-reset-after"]) : null;
+      const bucket = headers["x-ratelimit-bucket"];
+      const global = headers["x-ratelimit-global"] === "true";
+
+      bucketMap.set(bucketKey, { remaining, resetAfter, bucket, global });
+
+      return response;
+    },
+    async (error) => {
+      if (error.response && error.response.status === 429) {
+        const retryAfter = error.response.headers["retry-after"] !== undefined ?
+          parseFloat(error.response.headers["retry-after"]) : null;
+
+        if (retryAfter !== null) {
+          await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
+          return axiosInstance.request(error.config);
         }
-
-        if (hostPort) {
-            const [host, portStr] = hostPort.split(":");
-            const port = parseInt(portStr, 10) || undefined;
-
-            if (host && port) {
-                config.proxy = {
-                    protocol: "http",
-                    host,
-                    port,
-                };
-
-                if (auth) {
-                    const [username, password] = auth.split(":");
-                    if (username) config.proxy.auth = { username, password: password || "" };
-                }
-            }
-        }
+      }
+      return Promise.reject(error);
     }
+  );
 
-    const axiosInstance = axios.create(config);
-
-    // اختياري - interceptors (حالياً لا يغيرون الطلب)
-    axiosInstance.interceptors.request.use(
-        (cfg) => cfg,
-        (error) => Promise.reject(error)
-    );
-    axiosInstance.interceptors.response.use(
-        (resp) => resp,
-        (error) => Promise.reject(error)
-    );
-
-    return axiosInstance;
+  return axiosInstance;
 };
+
+module.exports = { customAxiosWithProxy };
